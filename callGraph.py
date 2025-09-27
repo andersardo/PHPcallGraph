@@ -8,13 +8,10 @@ import pydotplus
 
 """
 TODO
-Lös typningen av funktioner 'private', public', ''
-Hantering funktioner utanför klasser
-id på klasser stf namn + sätt label
-datastruktur för klass: Namn, Id, Typ, Klass
-fixa loop leta efter anrop med instansierade klassr; flera olika instansnamn
+Hantera flera klasser i en fil
+fixa loop leta efter anrop med instansierade klasser; flera olika instansnamn
 tooltip funkar inte i html browsers (svårlöst)
-
+Hantera Kommentarer!!
 """
 
 def help(msg=''):
@@ -43,24 +40,25 @@ except Exception as e:
 filename = os.path.split(file)[1]
 print(f"Analyserar {filename}")
 FunctionDefs = {}
-Functions = []
+InternalFunctions = []
 publicFunctions = []
 privateFunctions = []
 definition = False
 defFunc = ''
-
-#what functions
+Functions = {}
+funcId = 0
+# Hitta functions
 with open(file, 'r') as dbAPI:
-    func_pattern = r'(public|private)?\s+[\w]+\s+function\s+([^()]+)\('
+    func_pattern = r'(public|private)?(\s+static)?\s+function\s+([^()]+)\('
     class_pattern = r'class\s+([^(\s{]+)\s+{'
     cls = filename
     definition = False
     for line in dbAPI.readlines():
         m = re.search(class_pattern, line)
         if m:
-            cls = m.group(1)
+            cls = m.group(1) #HUR HITTA slut klass?
             # Hitta variabelnamn för klassinstanser
-            klassVar = set()
+            klassVar = set()  #Alla instansnamn för denna klass
             try:
                 cmd = ' '.join(['grep', '-r', f"'new {cls}'", projDir])
                 find_cls = subprocess.check_output(cmd, shell=True)
@@ -73,7 +71,7 @@ with open(file, 'r') as dbAPI:
                     lutf8 = l.decode('utf-8')
                     match = re.search(pat, lutf8)
                     if match:
-                        klassVar.add( match.group(1))
+                        klassVar.add(match.group(1))
                 if len(klassVar) == 1 and cls in klassVar:
                     pass
                 else:
@@ -82,23 +80,24 @@ with open(file, 'r') as dbAPI:
             FunctionDefs[defFunc] += line
         m = re.search(func_pattern, line)
         if m:
-            func = f"{cls}:{m.group(2)}".rstrip()
-            FunctionDefs[func] = line
-            if m.group(1) == 'private':
-                privateFunctions.append(func)
-            elif m.group(1) == 'public':
-                publicFunctions.append(func)
-            else:
-                Functions.append(func)
+            func = m.group(3)
+            if func == '__construct':
+                continue
+            typ = m.group(1)
             definition = True
             defFunc = func
+            funcId += 1
+            #testa dubblett
+            if func in Functions.keys():
+                print(f"ERR 1 dubblett-funktion {func}: {line}\n  {Functions[func]}")
+            Functions[func] = {'Id': funcId, 'Typ': typ, 'Klass': cls, 'Definition': line.rstrip()}
         m = re.search(r'\)', line)
         if m:
             definition = False
-allFuncs = set(privateFunctions + publicFunctions + Functions) # Hantera funktioner utanför klass
+allFuncs = set(Functions.keys())
 
 callGraph = defaultdict(set)
-p = '|'.join(list(allFuncs)).replace(f"{cls}:", '')
+p = '|'.join(list(allFuncs))
 pattern = re.compile(r'[\s\>](%s)\(' % p)
 defpattern = r'\s+function\s+([^()]+)\('
 #function calls
@@ -110,58 +109,60 @@ with open(file, 'r') as dbAPI:
         if ' function' in line:   #definitions
             m = re.search(defpattern, line)
             if m:
-                funcdef = f"{cls}:{m.group(1)}"
+                funcdef = m.group(1).rstrip()
             continue
         for m in pattern.finditer(line):
             if m:
-                #if m.group() == 'FileIDFromName': print(f"Found {m.group()} {line}")
-                func = f"{cls}:{m.group(1)}".rstrip()
-                if func in privateFunctions:
-                    typ = 'private'
-                elif func in publicFunctions:
-                    typ = 'public'
-                else:
-                    typ = 'extern'
-                #if funcdef == 'FileIDs': print(f"Call to {func} ({typ}) found in {funcdef} on line {i}")
-                callGraph[funcdef].add(func)
-
+                callGraph[funcdef].add(m.group(1).rstrip())
+                    
 graph = pydotplus.graphviz.Graph(graph_name=f"{filename.replace('.php', '')}", graph_type="digraph",
                                  overlap=False, rankdir = 'LR', ranksep = 0.25, nodesep=0.3)
 
 noCallers = set()
 defined = set()
 externa_anrop = set()
+calledFuncs = set()
 for func in allFuncs:
-    #if func in unusedFunctions: continue  #exclude unusedfunctions
-    if func in privateFunctions:
-        typ = 'private'
-        graph.add_node(pydotplus.graphviz.Node(name=func.replace(':', '_'), style='filled', fillcolor='green',
-                                               label=f'"{func}"', tooltip=f"{FunctionDefs[func].rstrip()}"))
-    elif func in publicFunctions:
-        typ = 'public'
-        graph.add_node(pydotplus.graphviz.Node(name=func.replace(':', '_'), style='filled', fillcolor='gold', shape='box',
-                                                label=f'"{func}"', tooltip=f"{FunctionDefs[func].rstrip()}"))
-    elif func in Functions:
-        typ = ''
-        graph.add_node(pydotplus.graphviz.Node(name=func.replace(':', '_'), style='filled', fillcolor='green', shape='hexagon',
-                                                label=f'"{func}"', tooltip=f"{FunctionDefs[func].rstrip()}"))
+    data = Functions[func]
+    if data['Klass']:
+        label = f"{data['Klass']}:{func}"
     else:
-        typ = 'extern'
-        graph.add_node(pydotplus.graphviz.Node(name=func.replace(':', '_'), style='filled', fillcolor='red')) #, obj_dict=None, **attrs)()
-    #print(f"{typ} function {func}")
+        label = func
+    if data['Typ'] == 'private':
+        graph.add_node(pydotplus.graphviz.Node(name=data['Id'], style='filled', fillcolor='green',
+                                               label=f'"{label}"', tooltip=f"{data['Definition'].rstrip()}"))
+    elif data['Typ'] == 'public':
+        typ = 'public'
+        graph.add_node(pydotplus.graphviz.Node(name=data['Id'], style='filled', fillcolor='gold', shape='box',
+                                                label=f'"{label}"', tooltip=f"{data['Definition'].rstrip()}"))
+    elif data['Typ'] == '':
+        typ = ''
+        graph.add_node(pydotplus.graphviz.Node(name=data['Id'], style='filled', fillcolor='green', shape='hexagon',
+                                                label=f'"{label}"', tooltip=f"{data['Definition'].rstrip()}"))
+    else:
+        typ = '?'
+        graph.add_node(pydotplus.graphviz.Node(name=data['Id'], style='filled', fillcolor='chartreuse', label=f'"{label}"'))
+
     if callGraph[func]:
-        #print('  Used by:')
         for f in callGraph[func]:
-            #print("    %s" % f)
-            graph.add_edge(pydotplus.graphviz.Edge(src=func.replace(':', '_'), dst=f.replace(':', '_')))  #, obj_dict=None, **attrs)
+            graph.add_edge(pydotplus.graphviz.Edge(src=data['Id'], dst=Functions[f]['Id']))
+            calledFuncs.add(func)
     # external callers
+    # loopa över olika instansnamn FIX
     try:
-        cmd = ' '.join(['grep', '-lr', '-e', '\"'+func.replace(':', '->')+'\"', projDir])
+        if data['Klass']:
+            txt = f"{data['Klass']}->{func}"
+        else:
+            txt = func
+        cmd = f'grep -lr -e "{txt}" {projDir}'
         ext = subprocess.check_output(cmd, shell=True)
-        #print(f"Ext {ext}")
+        if func == 'Person':
+            print(f"F={func} {Funktions[func]}")
+            print('txt', txt)
+            print('ext', ext)
+            print()
     except Exception as e:
         #print('Exception', e)
-        #prova grep utan ':'
         ext = False
     if ext:
         tt = ''
@@ -173,23 +174,29 @@ for func in allFuncs:
                 lentt += 1
         if tt:
             if lentt > 1:
-                nodeId = f"{func.replace(':', '_')}_ext"
-                graph.add_node(pydotplus.graphviz.Node(name=nodeId.rstrip(), style='filled', fillcolor='coral',
+                # Nytt anrop 'func_ext'
+                #testa dubblett
+                if f"{func}_Ext" in Functions.keys():
+                    t = Functions[f"{func}_Ext"]
+                    print(f"ERR 2 dubblett-funktion {func}_Ext: {line}\n  {t}")
+                funcId += 1
+                Functions[f"{func}_Ext"] = {'Id': funcId, 'Typ': 'extAnrop', 'Klass': '', 'Definition': ''}
+                graph.add_node(pydotplus.graphviz.Node(name=funcId, style='filled', fillcolor='coral',
                                                        shape='box', label='Extern', tooltip=f"{tt}"))
                 for t in tt.splitlines():
                     externa_anrop.add(t)
             else:
-                nodeId = tt.rstrip().split('/')[-1].replace('.php', '').rstrip()
-                if nodeId not in defined:
-                    graph.add_node(pydotplus.graphviz.Node(name=nodeId, style='filled', fillcolor='coral', shape='box',
-                                                   tooltip=f"{tt}"))
-                    externa_anrop.add(tt)
-                    defined.add(nodeId)
-            graph.add_edge(pydotplus.graphviz.Edge(src=nodeId.rstrip(), dst=func.replace(':', '_')))
-calledFuncs = set()
-for edge in graph.get_edge_list():
-    #print(edge.get_source(), '->', edge.get_destination())
-    calledFuncs.add(edge.get_destination().replace('_', ':'))
+                extFunc = tt.rstrip().split('/')[-1].replace('.php', '').rstrip()
+                # Nytt anrop externt
+                #testa dubblett
+                if extFunc not in Functions.keys():
+                    funcId += 1
+                    Functions[extFunc] = {'Id': funcId, 'Typ': 'extAnrop', 'Klass': '', 'Definition': ''}
+                    graph.add_node(pydotplus.graphviz.Node(name=funcId, style='filled', fillcolor='coral', shape='box',
+                                                       tooltip=f"{tt}", label=f'"{extFunc}"'))
+                externa_anrop.add(tt)
+            graph.add_edge(pydotplus.graphviz.Edge(src=funcId, dst=data['Id']))
+            calledFuncs.add(func)
 
 with open(f"./data/{filename.replace('.php', '.dot')}", 'w') as f:
     f.write(graph.to_string())
@@ -210,7 +217,7 @@ with open(f"./data/{filename.replace('.php', '.html')}", 'w') as html:
         html.write("<p>\n")
     #printa externa_anrop
     if externa_anrop:
-        html.write("<h2>Externa anrop</h2>\n")
+        html.write("<h2>Externa anrop från:</h2>\n")
         html.write(', '.join(sorted(externa_anrop)))
         print("Externa anrop:", ', '.join(sorted(list(externa_anrop))))
     # FIX KOLLA OM det finns graf!
