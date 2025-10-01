@@ -12,6 +12,7 @@ Hantera flera klasser i en fil
 fixa loop leta efter anrop med instansierade klasser; flera olika instansnamn
 tooltip funkar inte i html browsers (svårlöst)
 Hantera Kommentarer!!
+Lista functions utan inlänkar
 """
 
 def help(msg=''):
