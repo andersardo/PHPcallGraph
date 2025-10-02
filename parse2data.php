@@ -87,10 +87,10 @@ function ast_dump($ast, int $options = 0) : string {
 function ast_struct($ast, int $options = 0) {
     if ($ast instanceof ast\Node) {
         $result = ast\get_kind_name($ast->kind);
-	$skip = array('AST_PARAM', 'AST_PARAM_LIST', 'AST_RETURN', 'AST_PROP_DECL', 'AST_PROP_ELEM');
-	if (in_array($result, $skip)) {
-	   return 'null';
-	}
+	//$skip = array('AST_PARAM', 'AST_PARAM_LIST', 'AST_RETURN', 'AST_PROP_DECL', 'AST_PROP_ELEM');
+	//if (in_array($result, $skip)) {
+	//   return 'null';
+	//}
         $res = array();
         if ($options & AST_DUMP_LINENOS) {
             $result .= " @ $ast->lineno";

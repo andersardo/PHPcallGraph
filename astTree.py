@@ -6,12 +6,32 @@ import json
 from pprint import pprint,pp
 import pydotplus
 
+class Node:
+
+    def __init__(self, name, typ, data=''):
+        self.name = name
+        if typ in ('Fil', 'Klass', 'Funk', 'Anrop'):
+            self.typ = typ
+        else:
+            sys.exit(f"Okänd typ {typ} för {name}")
+        self.data = data.replace('this->', '')
+        self.nodes = set()
+
+    def insert(self, nod):
+        self.nodes.add(nod)
+        return nod
+    
+    def printTree(self, prefix=''):
+        print(prefix, self.typ, self.name, self.data)
+        
+        for typ in ('Klass', 'Funk', 'Anrop'):
+            for n in [x for x in self.nodes if x.typ == typ]:
+                n.printTree(prefix + '  ')
+
 class ast():
     def __init__(self, file):
-        self.data = {file: {'class': {}, 'function': {}, 'anrop': {}}}
-        self.clsName = ''
-        self.cls = {}
-        self.method = {}
+        self.tree = Node(file, 'Fil')
+        self.current = [self.tree]
         #get ast
         cmd = f"php parse2data.php {file}"  #get ast as datastruct - Walk recursively
         res = subprocess.check_output(cmd, shell=True)
@@ -19,28 +39,28 @@ class ast():
 
     def doClass(self, ast):
         name = ast['name'].replace('"', '')
-        print(f"Klass {name} start")
-        self.data[file]['class'][name] = {'func': {}}
-        self.cls = self.data[file]['class'][name]
-        self.clsName = name
+        #print(f"Klass {name} start")
+        nod = self.current[-1].insert(Node(name, typ='Klass'))
+        self.current.append(nod)
         for key,val in ast.items():
             self.process(val)
-        print(f"Klass {name} end")
-        self.cls = {}
+        #print(f"Klass {name} end")
+        self.current.pop()
 
     def doMethod(self, ast):
-        name = f"{clsName}_" + ast['name'].replace('"', '')
+        #??name = f"{clsName}_" + ast['name'].replace('"', '')
+        name = ast['name'].replace('"', '')
         if ast.get('flags'):
             flags = ast.get('flags').replace('MODIFIER_', '').split()[0]
         else:
             flags = ''
         #print(f"{flags} function {name} start")
-        self.cls['func'][name] = {'typ': flags.lower(), 'anrop': set()}
-        self.method = cls['func'][name]
+        nod = self.current[-1].insert(Node(name, 'Funk', data=flags.lower()))
+        self.current.append(nod)
         for key,val in ast.items():
             self.process(val)
         #print(f"{flags} function {name} end")
-        self.method = {}
+        self.current.pop()
 
     def doMethodCall(self, ast):
         try:
@@ -53,28 +73,14 @@ class ast():
                     prop = ast['expr']['AST_PROP']['prop'].replace('"', '') + "->"
                     var = ast_var['name'].replace('"', '')
                     #print(f" Anrop {var}->{prop}{name}")
-                    self.method['anrop'].add(f"{var}->{prop}{name}".replace('this->', f"{self.clsName}_"))
+                    nod = self.current[-1].insert(Node(name, 'Anrop', data=f"{var}->{prop}"))
                 elif ast['expr'].get('AST_VAR'):
                     #{'expr': {'AST_VAR': {'name': '"this"'}}, 'method': '"Children"', ...
                     ast_var = ast['expr']['AST_VAR']
                     prop = ''
                     var = ast_var['name'].replace('"', '')
                     #print(f" Anrop {var}->{prop}{name}")
-                    self.method['anrop'].add(f"{var}->{prop}{name}".replace('this->', f"{self.clsName}_"))
-                """
-                elif ast['expr'].get('AST_STATIC_CALL'):
-                    #{'expr': {'AST_STATIC_CALL': {'class': {'AST_NAME': {'name': '"DB"', 'flags': 'NAME_NOT_FQ (1)'}},
-                    #                              'method': '"getInstance"', 'args':
-                    print('doMethodCall', ast)
-                    sys.exit()
-                    cls = ast['expr']['AST_STATIC_CALL']
-                    method = cls['method'].replace('"', '')
-                    clsnm = cls['class']['AST_NAME']['name'].replace('"', '')
-                    call = f"{clsnm}->{method}".replace('this->', f"{self.clsName}_")
-                    print(f" MethodCall {call}")
-                    print(self.method)
-                    self.method['anrop'].add(f"{cls['AST_NAME']['name']}->{cls['method']}".replace("this->", f"{self.clsName}_"))
-                """
+                    nod = self.current[-1].insert(Node(name, 'Anrop', data=f"{var}->{prop}"))
             else:
                 print(f" ? {ast}")
                 sys.exit()
@@ -91,20 +97,19 @@ class ast():
     #            'args': {'AST_ARG_LIST': [{'AST_VAR': {'name': '"aa"'}}]}
     #           }
         name = ast['expr']['AST_NAME']['name'].replace('"', '')
-        print(f"  Call {name}")
-        #self.method['anrop'].add(name)
+        #print(f"  Call {name}")
+        nod = self.current[-1].insert(Node(name, 'Anrop'))
         for key,val in ast.items():
             self.process(val)
 
     def doAST_Static_Call(self, ast):
         #'class': {'AST_NAME': {'name': '"DB"', 'flags': 'NAME_NOT_FQ (1)'}}, 'method': '"getPassiveDBname"', 'args': []}
-        print('doAST_Static_Call', ast)
+        #print('doAST_Static_Call', ast)
         clsName = ast['class']['AST_NAME']['name'].replace('"', '')
-        print(ast['method'])
+        #print(ast['method'])
         method =  ast['method'].replace('"', '')
-        print(f"  Call {clsName}::{method}")
-        print(f"Meth={self.method}, clsnm={self.clsName}")
-        #self.method['anrop'].add(name)
+        #print(f"  Call {clsName}::{method}")
+        nod = self.current[-1].insert(Node(method, 'Anrop', data=clsName))
         for key,val in ast.items():
             self.process(val)
 
@@ -139,8 +144,22 @@ class ast():
     def getData(self):
         self.process(self.astData)
         return self.data
+
+    def getTree(self):
+        self.process(self.astData)
+        return self.tree
 #end ast
 
+"""
+##TEST
+f = 'MSPDO1.php'
+fileAST = ast(f)
+t = fileAST.getTree()
+print('----------')
+t.printTree()
+sys.exit()
+###
+"""
 try:
     projDir = sys.argv[1]
     print(f"Projektkatalog={projDir}")
@@ -154,12 +173,20 @@ done = []
 totNotCalled = set()
 totExt = set()
 fileData = {}
+allFuncs = set()
 for f in Path(projDir).rglob('*.php'):
-    if 'Inmatning_utf8' not in str(f): continue
-    print(f"Doing '{f}'")
-    #phpFil = str(f)
-    fileAST = ast(f)
-    fileData[f] = fileAST.getData()
+    if '/smarty/' in str(f):
+        print(f"SKIP {f}")
+        continue
+    try:
+        print(f"Analyserar '{f}'")
+        fileAST = ast(f)
+        fileData[f] = fileAST.getTree()
+        fileData[f].printTree()
+    except Exception as e:
+        print(f"MISSLYCKADES med {f}")
+
+
 
 """
 allFuncs = data['MSPDO1.php']['class']['MS']['func'].keys()
