@@ -6,27 +6,76 @@ import json
 from pprint import pprint,pp
 import pydotplus
 
+uid = 0
+done = set()
+defined = {}  #name2Id
 class Node:
-
     def __init__(self, name, typ, data=''):
         self.name = name
+        self.id = '?'
         if typ in ('Fil', 'Klass', 'Funk', 'Anrop'):
             self.typ = typ
         else:
             sys.exit(f"Okänd typ {typ} för {name}")
-        self.data = data.replace('this->', '')
+        self.data = data  #.replace('this->', '')
         self.nodes = set()
+        self.graph = None
 
     def insert(self, nod):
         self.nodes.add(nod)
         return nod
     
     def printTree(self, prefix=''):
-        print(prefix, self.typ, self.name, self.data)
-        
+        print(f"{prefix}{self.id}: {self.typ} {self.name} {self.data}")
         for typ in ('Klass', 'Funk', 'Anrop'):
             for n in [x for x in self.nodes if x.typ == typ]:
                 n.printTree(prefix + '  ')
+
+    def makeGraph(self, klass=None, funcId=None, graph=None):
+        global done
+        if not graph:
+            namn = os.path.split(f)[1].replace('.php', '')
+            self.graph = pydotplus.graphviz.Graph(graph_name='test', graph_type="digraph",
+                                 overlap=False, rankdir = 'LR', ranksep = 0.25, nodesep=0.3)
+            graph = self.graph
+            done = set()
+        if self.typ == 'Fil':
+            pass
+        elif self.typ == 'Klass':
+            klass = self.name
+        elif self.typ == 'Funk':
+            funcId = self.id
+            label = f"{klass}:{self.name}"
+            if self.id not in done:
+                done.add(self.id)
+                graph.add_node(pydotplus.graphviz.Node(name=self.id, label=f'"{label}"'))
+        elif self.typ == 'Anrop':
+            #print(f"{funcId} -> {self.id}: {self.typ} {self.name} {self.data}")
+            cls = self.data.replace('this->', klass)
+            if cls:
+                label = f"{cls}:{self.name}"
+            else:
+                label = self.name
+            if self.id not in done:
+                done.add(self.id)
+                graph.add_node(pydotplus.graphviz.Node(name=self.id, label=f'"{label}"'))
+            graph.add_edge(pydotplus.graphviz.Edge(src=funcId, dst=self.id))
+        for typ in ('Klass', 'Funk', 'Anrop'):
+            for n in [x for x in self.nodes if x.typ == typ]:
+                    n.makeGraph(klass, funcId, graph)
+        return graph
+
+    def assignIds(self):
+        global uid
+        global defined
+        if f"{self.name}" in defined:
+            self.id = defined[f"{self.name}"]
+        if self.id == '?':
+            uid += 1
+            self.id = uid
+            defined[f"{self.name}"] = uid
+        for n in self.nodes:
+            n.assignIds()
 
 class ast():
     def __init__(self, file):
@@ -141,25 +190,10 @@ class ast():
         else:
             pass
 
-    def getData(self):
-        self.process(self.astData)
-        return self.data
-
     def getTree(self):
         self.process(self.astData)
         return self.tree
-#end ast
-
-"""
-##TEST
-f = 'MSPDO1.php'
-fileAST = ast(f)
-t = fileAST.getTree()
-print('----------')
-t.printTree()
-sys.exit()
-###
-"""
+    
 try:
     projDir = sys.argv[1]
     print(f"Projektkatalog={projDir}")
@@ -168,7 +202,7 @@ try:
 except Exception as e:
     sys.exit(f"{projDir} är inte en katalog {e}")
 
-# Gå igenom alla PHP-filer i projdDir utom 'smarty' och 'Dis*'
+# Gå igenom alla PHP-filer i projdDir recursivt utom 'smarty' ?? och 'Dis*'??
 done = []
 totNotCalled = set()
 totExt = set()
@@ -176,53 +210,24 @@ fileData = {}
 allFuncs = set()
 for f in Path(projDir).rglob('*.php'):
     if '/smarty/' in str(f):
-        print(f"SKIP {f}")
+        #print(f"SKIP {f}")
         continue
     try:
+        if not 'MSPDO1' in str(f): continue
         print(f"Analyserar '{f}'")
         fileAST = ast(f)
         fileData[f] = fileAST.getTree()
-        fileData[f].printTree()
+        fileData[f].assignIds()
+        #fileData[f].printTree()
+        dotfil = 'data/' + os.path.split(f)[1].replace('php', 'dot')
+        graph = fileData[f].makeGraph()
+        with open(f"{dotfil}", 'w') as f:
+            f.write(graph.to_string())
+        os.system(f"dot -Tsvg {dotfil} > {dotfil.replace('.dot', '.svg')}")
     except Exception as e:
-        print(f"MISSLYCKADES med {f}")
-
-
-
-"""
-allFuncs = data['MSPDO1.php']['class']['MS']['func'].keys()
-
-allCalls = False
-#allCalls = True
-for key, val in data['MSPDO1.php']['class']['MS']['func'].items():
-    if val['anrop']:
-        print(f"Anrop för {key}")
-        for c in val['anrop']:
-            if c in allFuncs:
-                print(f"  cls {c}")
-            else:
-                if allCalls: print(f"  std {c}")
-                pass
-"""
-sys.exit()
-graph = pydotplus.graphviz.Graph(graph_name="MSPDO1", graph_type="digraph",
-                                 overlap=False, rankdir = 'LR', ranksep = 0.25, nodesep=0.3)
-
-#do Klass MS
-classNamn = 'MS'
-classData = data['MSPDO1.php']['class'][classNamn]
-for func, val in classData['func'].items():
-    if val['typ'] == 'private':
-        graph.add_node(pydotplus.graphviz.Node(name=func, style='filled', fillcolor='green', label=f'"{func}"'))
-    elif val['typ'] == 'public':
-        graph.add_node(pydotplus.graphviz.Node(name=func, style='filled', fillcolor='gold', shape='box', label=f'"{func}"'))
-for key, val in classData['func'].items():
-    if val['anrop']:
-        for c in val['anrop']:
-            if c in allFuncs:
-                graph.add_edge(pydotplus.graphviz.Edge(src=key, dst=c))
-with open(f"MSPDO1.dot", 'w') as f:
-    f.write(graph.to_string())
-os.system(f"dot -Tsvg MSPDO1.dot > MSPDO1.svg")
-
-#process => data contains result
-
+        import traceback
+        print(traceback.print_exception(e))
+        print(f"MISSLYCKADES med {f} {e}")
+        print(type(e))
+        print(e.args)
+        print(traceback.format_exc())
