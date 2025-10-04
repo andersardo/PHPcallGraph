@@ -3,12 +3,10 @@ import os
 import subprocess
 from pathlib import Path
 import json
-from pprint import pprint,pp
-import pydotplus
 
 uid = 0
-done = set()
 defined = {}  #name2Id
+defFunk = set()  #defined functions
 class Node:
     def __init__(self, name, typ, data=''):
         self.name = name
@@ -17,12 +15,12 @@ class Node:
             self.typ = typ
         else:
             sys.exit(f"Okänd typ {typ} för {name}")
-        self.data = data  #.replace('this->', '')
-        self.nodes = set()
+        self.data = data
+        self.nodes = []
         self.graph = None
 
     def insert(self, nod):
-        self.nodes.add(nod)
+        self.nodes.append(nod)
         return nod
     
     def printTree(self, prefix=''):
@@ -31,38 +29,38 @@ class Node:
             for n in [x for x in self.nodes if x.typ == typ]:
                 n.printTree(prefix + '  ')
 
-    def makeGraph(self, klass=None, funcId=None, graph=None):
-        global done
+    def mkGraph(self, graph=None, id=None, prefix=''):
+        #Graphviz colors: cornflowerblue, deepskyblue, red, chartreuse, gold, coral, green, yellow
         if not graph:
-            namn = os.path.split(f)[1].replace('.php', '')
-            self.graph = pydotplus.graphviz.Graph(graph_name='test', graph_type="digraph",
-                                 overlap=False, rankdir = 'LR', ranksep = 0.25, nodesep=0.3)
+            self.graph = "digraph testmk {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25; compound=true;\n"
             graph = self.graph
             done = set()
-        if self.typ == 'Fil':
-            pass
-        elif self.typ == 'Klass':
-            klass = self.name
-        elif self.typ == 'Funk':
-            funcId = self.id
-            label = f"{klass}:{self.name}"
-            if self.id not in done:
-                done.add(self.id)
-                graph.add_node(pydotplus.graphviz.Node(name=self.id, label=f'"{label}"'))
-        elif self.typ == 'Anrop':
-            #print(f"{funcId} -> {self.id}: {self.typ} {self.name} {self.data}")
-            cls = self.data.replace('this->', klass)
-            if cls:
-                label = f"{cls}:{self.name}"
+        if self.typ in ('Fil', 'Klass', 'Funk'):
+            #DEB label = f"{self.id} {self.data} {self.name}"
+            label = f"{self.data} {self.name}"
+            color = 'firebrick1'
+            if self.typ == 'Fil':
+                graph += f'{self.id} [fillcolor="chartreuse", label="{label}", style=filled, shape="box"];\n'                
+            elif self.typ == 'Klass':
+                color = 'coral'
+                graph += f'subgraph cluster{self.name} {{graph [style=rounded] label="Klass {label}"\n'
+            elif self.typ == 'Funk' and self.data == 'public':
+                graph += f'{self.id} [fillcolor="gold", label="{label}", style=filled, shape="box"];\n'
+            elif (self.typ == 'Funk') and (self.data == 'private'):
+                graph += f'{self.id} [fillcolor="green", label="{label}", style=filled];\n'
+            elif self.typ == 'Funk':
+                graph += f'{self.id} [fillcolor="yellow", label="{label}", style=filled];\n'
             else:
-                label = self.name
-            if self.id not in done:
-                done.add(self.id)
-                graph.add_node(pydotplus.graphviz.Node(name=self.id, label=f'"{label}"'))
-            graph.add_edge(pydotplus.graphviz.Edge(src=funcId, dst=self.id))
-        for typ in ('Klass', 'Funk', 'Anrop'):
-            for n in [x for x in self.nodes if x.typ == typ]:
-                    n.makeGraph(klass, funcId, graph)
+                graph += f'{self.id} [fillcolor="{color}", label="{label}", style=filled];\n'
+            for n in self.nodes:
+                graph += n.mkGraph(graph=' ', id=self.id, prefix='  '+prefix)
+            if self.typ == 'Klass':
+                graph += "}\n"
+        elif self.typ == 'Anrop':
+            if self.id in defFunk:
+                graph += f"{id} -> {self.id};\n"
+        else:
+            sys.exit(f"Okänd typ {self.id}: {self.typ} {self.name} {self.data}")
         return graph
 
     def assignIds(self):
@@ -77,6 +75,13 @@ class Node:
         for n in self.nodes:
             n.assignIds()
 
+    def definedFunctions(self):
+        global defFunk
+        if self.typ == 'Funk':
+            defFunk.add(self.id)
+        for n in self.nodes:
+            n.definedFunctions()
+
 class ast():
     def __init__(self, file):
         self.tree = Node(file, 'Fil')
@@ -85,6 +90,7 @@ class ast():
         cmd = f"php parse2data.php {file}"  #get ast as datastruct - Walk recursively
         res = subprocess.check_output(cmd, shell=True)
         self.astData = json.loads(res)
+        self.varMap = {}
 
     def doClass(self, ast):
         name = ast['name'].replace('"', '')
@@ -121,14 +127,16 @@ class ast():
                     ast_var = ast['expr']['AST_PROP']['expr']['AST_VAR']
                     prop = ast['expr']['AST_PROP']['prop'].replace('"', '') + "->"
                     var = ast_var['name'].replace('"', '')
-                    #print(f" Anrop {var}->{prop}{name}")
+                    #print(f" A: Anrop {var}->{prop}{name}")
                     nod = self.current[-1].insert(Node(name, 'Anrop', data=f"{var}->{prop}"))
                 elif ast['expr'].get('AST_VAR'):
                     #{'expr': {'AST_VAR': {'name': '"this"'}}, 'method': '"Children"', ...
                     ast_var = ast['expr']['AST_VAR']
                     prop = ''
                     var = ast_var['name'].replace('"', '')
-                    #print(f" Anrop {var}->{prop}{name}")
+                    if var in self.varMap.keys():
+                        var = self.varMap[var]
+                    #print(f" B: Anrop {var}->{prop}{name}")
                     nod = self.current[-1].insert(Node(name, 'Anrop', data=f"{var}->{prop}"))
             else:
                 print(f" ? {ast}")
@@ -163,9 +171,17 @@ class ast():
             self.process(val)
 
     def doNew(self, ast):
-        #{'AST_ASSIGN': {'var': {'AST_VAR': {'name': '"MS"'}},
+        #{'AST_ASSIGN': {'var': {'AST_VAR': {'name': '"MSa"'}},
         #                'expr': {'AST_NEW': {'class': {'AST_NAME': {'name': '"MS"', ...
-        pass
+        try:
+            var = ast['var']['AST_VAR']['name'].replace('"', '')
+            cls = ast['expr']['AST_NEW']['class']['AST_NAME']['name'].replace('"', '')
+            self.varMap[var] = cls
+        except:
+            #print(f"ERR doNew {ast}")
+            pass
+        for key,val in ast.items():
+            self.process(val)
 
     def process(self, ast):
         if type(ast) is dict:
@@ -179,6 +195,8 @@ class ast():
                 self.doAST_Call(ast['AST_CALL'])
             elif ast.get('AST_STATIC_CALL'):
                 self.doAST_Static_Call(ast['AST_STATIC_CALL'])
+            elif ast.get('AST_ASSIGN'):
+                self.doNew(ast['AST_ASSIGN'])
             else:
                 for key,val in ast.items():
                     self.process(val)
@@ -192,6 +210,7 @@ class ast():
 
     def getTree(self):
         self.process(self.astData)
+        #print(self.varMap)
         return self.tree
     
 try:
@@ -213,16 +232,19 @@ for f in Path(projDir).rglob('*.php'):
         #print(f"SKIP {f}")
         continue
     try:
-        if not 'MSPDO1' in str(f): continue
+        #DEB if not 'pushJsonData' in str(f): continue  #DEB
         print(f"Analyserar '{f}'")
         fileAST = ast(f)
         fileData[f] = fileAST.getTree()
         fileData[f].assignIds()
+        fileData[f].definedFunctions()
+        #uid och defFunk globala!!
         #fileData[f].printTree()
         dotfil = 'data/' + os.path.split(f)[1].replace('php', 'dot')
-        graph = fileData[f].makeGraph()
+        graph = fileData[f].mkGraph()
         with open(f"{dotfil}", 'w') as f:
-            f.write(graph.to_string())
+            f.write(graph)  #graph.to_string())
+            f.write("}\n")
         os.system(f"dot -Tsvg {dotfil} > {dotfil.replace('.dot', '.svg')}")
     except Exception as e:
         import traceback
