@@ -3,10 +3,13 @@ import os
 import subprocess
 from pathlib import Path
 import json
+from collections import defaultdict
 
+# Globala variabler
 uid = 0
 defined = {}  #name2Id
-defFunk = set()  #defined functions
+defFunk = set()  #id of defined functions (Funk)
+
 class Node:
     def __init__(self, name, typ, data=''):
         self.name = name
@@ -32,12 +35,13 @@ class Node:
     def mkGraph(self, graph=None, id=None, prefix=''):
         #Graphviz colors: cornflowerblue, deepskyblue, red, chartreuse, gold, coral, green, yellow
         if not graph:
-            self.graph = "digraph testmk {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25; compound=true;\n"
+            self.graph = "digraph testmk {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25; concentrate=true;\n"
             graph = self.graph
             done = set()
         if self.typ in ('Fil', 'Klass', 'Funk'):
             #DEB label = f"{self.id} {self.data} {self.name}"
-            label = f"{self.data} {self.name}"
+            #label = f"{self.data} {self.name}" #Extended
+            label = f"{self.name}"  #Minimal
             color = 'firebrick1'
             if self.typ == 'Fil':
                 graph += f'{self.id} [fillcolor="chartreuse", label="{label}", style=filled, shape="box"];\n'                
@@ -221,35 +225,129 @@ try:
 except Exception as e:
     sys.exit(f"{projDir} är inte en katalog {e}")
 
-# Gå igenom alla PHP-filer i projdDir recursivt utom 'smarty' ?? och 'Dis*'??
-done = []
-totNotCalled = set()
-totExt = set()
 fileData = {}
-allFuncs = set()
+# Gå igenom alla PHP-filer i projdDir recursivt utom 'smarty' ??
 for f in Path(projDir).rglob('*.php'):
     if '/smarty/' in str(f):
         #print(f"SKIP {f}")
         continue
     try:
-        #DEB if not 'pushJsonData' in str(f): continue  #DEB
+        if not 'MSPDO1' in str(f): continue  #DEB
         print(f"Analyserar '{f}'")
+        SPARA ALLA resultat per fil i fileData - ast, defined, id2Namn, defFunk, allFuncs, externa_anrop, inteAnropadeNamn ...
+        fileData[f] = None
         fileAST = ast(f)
         fileData[f] = fileAST.getTree()
         fileData[f].assignIds()
-        fileData[f].definedFunctions()
-        #uid och defFunk globala!!
-        #fileData[f].printTree()
+        x = fileData[f].definedFunctions()
+        # Rita graph
         dotfil = 'data/' + os.path.split(f)[1].replace('php', 'dot')
         graph = fileData[f].mkGraph()
-        with open(f"{dotfil}", 'w') as f:
-            f.write(graph)  #graph.to_string())
-            f.write("}\n")
+        with open(f"{dotfil}", 'w') as fil:
+            fil.write(graph)  #graph.to_string())
+            fil.write("}\n")
         os.system(f"dot -Tsvg {dotfil} > {dotfil.replace('.dot', '.svg')}")
+        if '->' in graph:
+            containsEdges = True
+        else:
+            containsEdges = False
+        id2Name = {v: k for k, v in defined.items()}
+        #anropade (called) functions
+        calls = defaultdict(set)
+        anropade = set()
+        for l in graph.splitlines():
+            try:
+                (caller, callee) = l.strip().rstrip(';').split(' -> ')
+                calls[caller].add(int(callee))
+                anropade.add(int(callee))
+            except:
+                pass
+        # Generera HTML för varje PHP-fil
+        allFuncs = set(defined.values())  #Alla funktioner
+        externa_anrop = list(allFuncs.difference(defFunk))  #anrop till externa funktioner
+        with open(f"{dotfil.replace('.dot', '.html')}", 'w') as html:
+            (dir, filnamn) = os.path.split(f)
+            dir = f"{dir}/".replace(projDir, '')
+            filnamn = filnamn.replace('.php', '')
+            html.write(f"""<!DOCTYPE html>
+            <html>
+            <head><title>Statisk call-graf för {filnamn}</title></head>
+            <body>
+            <h1>Statisk call-graf för {filnamn}</h1>
+            <a href='./top_index.html'>Tillbaka till top index</a>
+            """)
+            if allFuncs.difference(anropade).difference(externa_anrop):
+                html.write("<h2>Inte !lokalt! anropade funktioner</h2>\n")
+                inteAnropadeNamn = [id2Name[x] for x in allFuncs.difference(anropade).difference(externa_anrop)]
+                html.write(', '.join(sorted(inteAnropadeNamn)))
+                html.write("<p>\n")
+            #printa externa_anrop
+            if externa_anrop:
+                html.write("<h2>Externa anrop till:</h2>\n")
+                externaAnropadeNamn = [id2Name[x] for x in externa_anrop]
+                html.write(', '.join(sorted(externaAnropadeNamn)))
+            # FIX KOLLA OM det finns graf!
+            if containsEdges:
+                html.write("<h2>Call-graf</h2>\n")
+                html.write("""Röd? anger anrop från en annan fil.<br>
+                Gul anger "public functions".<br>
+                Grön anger "private functions".<br>\n""")
+                html.write(f"<img src='{dotfil.replace('data/', '').replace('.dot', '.svg')}' width='100%'>\n")
+            html.write("</body>\n</html>\n")
+
     except Exception as e:
         import traceback
         print(traceback.print_exception(e))
-        print(f"MISSLYCKADES med {f} {e}")
+        print(f"MISSLYCKADES med {f}\n{e}\n")
         print(type(e))
         print(e.args)
         print(traceback.format_exc())
+        logfil = 'data/' + os.path.split(f)[1].replace('php', 'log')
+        with open(logfil, 'w') as log:
+            log.write(f"MISSLYCKADES med {f}\n")
+            log.write(str(type(e)) + "\n")
+            log.write("".join(traceback.format_exception(e)))
+            
+sys.exit()
+
+#find duplicate defined functions
+print("Test dubbletter")
+
+x = set()
+id2Name = {}
+for f,id in defined.items():
+    if '../Disbyt/' in f: continue
+    if f in x:
+        print(f"Dubblett id={id} namn={f}")
+    x.add(f)
+    id2Name[id] = f
+
+with open('./data/top_index.html', 'w') as html:
+    html.write(f"""<!DOCTYPE html>
+    <html>
+    <head><title>Statiska call-grafer för {projDir}</title></head>
+    <body>
+    <h1>Statiska call-grafer för {projDir}</h1>
+    """)
+    html.write("<table border=1>\n")
+    html.write("<tr><th>Katalog</th><th>Fil</th><th>Log-fil</th></tr>\n")
+    for fil in sorted(fileData.keys()):
+        (dir, filnamn) = os.path.split(fil)
+        dir = f"{dir}/".replace(projDir, '')
+        filnamn = filnamn.replace('.php', '')
+        if Path(f"./data/{filnamn}.html").is_file():
+            html.write(f"<tr><td>./{dir}</td><td><a href='{filnamn}.html'>{filnamn}</a></td>")
+        else:
+            html.write(f"<tr><td>./{dir}</td><td>ERR {filnamn}</td>")
+        if Path(f"./data/{filnamn}.log").is_file():
+            html.write(f"<td><a href='{filnamn}.log'>Log</a></td></tr>\n")
+        else:
+            html.write(f"<td>-</td></tr>\n")
+    html.write("</table>\n")
+    #Inte anropade
+    #  totNotCalled
+    html.write("<h2>Inte använda funktioner</h2>\n")
+    #?? html.write(', '.join(sorted(list(totNotCalled))))
+    #Externa anrop
+    # Gör graf av totExt vilka filer som anropar andra filer
+    #?? html.write("<h2>Projekt call-graf (filer)</h2>\n")
