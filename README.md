@@ -4,7 +4,7 @@
 ```
 python3 astTree.py <projekt-katalog>
 ```
-Resultatet hamnar i katalogen **data**
+Resultatet hamnar i katalogen **data** (som måste finnas).
 
 # Requirements:
 * python3
