@@ -1,4 +1,4 @@
-# Skapar call-graf för ett php projekt.
+# Skapar call-graf för ett PHP projekt.
 
 # Användning
 ```
