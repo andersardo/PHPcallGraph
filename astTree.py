@@ -9,10 +9,22 @@ import traceback
 
 # Globala variabler
 uid = 0
-defined = {}  #name2Id  BYT NAMN
-localDefined = {} #defined in this file
+name2Id = {}  #Använda funktioner
+localUsed = {} #defined in this file (dict name -> Id) plus anropade
 defFunk = set()  #id of defined functions (Funk)
-localDefFunk = set()  #id of functions defined in this file
+#skillnad på set(name2id.values) och defFunk ?????
+localDefinedFunk = set()  #id of functions defined in this file
+#Read list of standard funktions in PHP
+stdFunctions = set()
+with open('allaPHPstdFunktioner.txt', 'r') as f:
+    for line in f.readlines():
+        if not ' - ' in line: continue
+        if '::' in line: continue
+        if '\\' in line: continue
+        line = line.strip()
+        (name, desc) = line.split(' - ', 1)
+        if len(name) <=1: continue
+        stdFunctions.add(name.strip())
 
 try:
     projDir = sys.argv[1]
@@ -24,7 +36,9 @@ except Exception as e:
 
 class Node:
     def __init__(self, name, typ, data=''):
-        self.name = name.replace(projDir, '')  #Remove start-path 
+        self.name = name.replace(projDir, '')  #Remove start-path
+        #FIX case handling PHP insensitive for case
+        self.nameLower = name.replace(projDir, '').lower()  #Remove start-path; case-insensitive 
         self.id = '?'
         if typ in ('Fil', 'Klass', 'Funk', 'Anrop'):
             self.typ = typ
@@ -33,6 +47,7 @@ class Node:
         self.data = data
         self.nodes = []
         self.graph = None
+        self.varMap = None #??? kolla användning!!!
 
     def insert(self, nod):
         self.nodes.append(nod)
@@ -49,7 +64,7 @@ class Node:
         if not graph:
             self.graph = '' #"digraph testmk {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25; \n"
             graph = self.graph
-            done = set()
+            ##??done = set()
         if self.typ in ('Fil', 'Klass', 'Funk'):
             #DEB label = f"{self.id} {self.data} {self.name}"
             #label = f"{self.data} {self.name}" #Extended
@@ -73,32 +88,43 @@ class Node:
             if self.typ == 'Klass':
                 graph += "}\n"
         elif self.typ == 'Anrop':
-            if self.id in defFunk:
-                graph += f"{id} -> {self.id};\n"
+            if self.id in defFunk: #Bara länka till använda funktioner
+                graph += f"{id} -> {self.id};\n" #Link local function to external function
+            #else:
+            #    print(f"Inte i defFunk: {self.name}, {self.id}")
         else:
             sys.exit(f"Okänd typ {self.id}: {self.typ} {self.name} {self.data}")
         return graph
 
-    def assignIds(self):
+    def assignIds(self):  #Alla namn
         global uid
-        global defined
-        if f"{self.name}" in defined:
-            self.id = defined[f"{self.name}"]
+        global name2Id
+        if f"{self.name}" in name2Id:
+            self.id = name2Id[f"{self.name}"]
         if self.id == '?':
             uid += 1
             self.id = uid
-            defined[f"{self.name}"] = uid
-        localDefined[f"{self.name}"] = self.id
+            name2Id[f"{self.name}"] = uid
+        localUsed[f"{self.name}"] = self.id
         for n in self.nodes:
             n.assignIds()
 
-    def definedFunctions(self):  #BYT NAMN
+    def usedFunctions(self):  # Alla definierade funktioner i denna fil
         global defFunk
         if self.typ == 'Funk':
             defFunk.add(self.id)
-            localDefFunk.add(self.id)
+            localDefinedFunk.add(self.id)
         for n in self.nodes:
-            n.definedFunctions()
+            n.usedFunctions()
+
+    def getFunctions(self):  # Anropade och Definierade
+        global Anropade, Definierade
+        if self.typ == 'Funk':  #Definierade
+            Definierade.add(self.name)
+        elif self.typ == 'Anrop':  #Anropade
+            Anropade.add(self.name)
+        for n in self.nodes:
+            n.getFunctions()
 
 class ast():
     def __init__(self, file):
@@ -135,6 +161,15 @@ class ast():
         #print(f"{flags} function {name} end")
         self.current.pop()
 
+    def doAST_Function(self, ast):
+        #{'name': '"VersionFile"', 'params': [],
+        # 'stmts': {'AST_STMT_LIST': ...
+        #print('doAST_Function', ast, "\n")
+        name = ast['name'].replace('"', '')
+        nod = self.current[-1].insert(Node(name, 'Funk', data='function'))
+        for key,val in ast.items():
+            self.process(val)
+
     def doMethodCall(self, ast):
         try:
             if ast.get('method'):
@@ -167,11 +202,18 @@ class ast():
             pass
 
     def doAST_Call(self, ast):
-    #    {'AST_CALL':
-    #           {'expr': {'AST_NAME': {'name': '"testPriv"', 'flags': 'NAME_NOT_FQ (1)'}},
-    #            'args': {'AST_ARG_LIST': [{'AST_VAR': {'name': '"aa"'}}]}
-    #           }
-        name = ast['expr']['AST_NAME']['name'].replace('"', '')
+        """
+        {'AST_CALL':
+            {'expr': {'AST_NAME': {'name': '"testPriv"', 'flags': 'NAME_NOT_FQ (1)'}},
+             'args': {'AST_ARG_LIST': [{'AST_VAR': {'name': '"aa"'}}]}
+        }}
+        {'AST_CALL': {'expr': {'AST_VAR': {'name': '"function"'}}, 'args': []}}
+        """
+        #print('I', ast)
+        try:
+            name = ast['expr']['AST_NAME']['name'].replace('"', '')
+        except:
+            name = '?_' + ast['expr']['AST_VAR']['name'].replace('"', '')
         #print(f"  Call {name}")
         nod = self.current[-1].insert(Node(name, 'Anrop'))
         for key,val in ast.items():
@@ -188,6 +230,7 @@ class ast():
         for key,val in ast.items():
             self.process(val)
 
+
     def doNew(self, ast):
         #{'AST_ASSIGN': {'var': {'AST_VAR': {'name': '"MSa"'}},
         #                'expr': {'AST_NEW': {'class': {'AST_NAME': {'name': '"MS"', ...
@@ -195,8 +238,9 @@ class ast():
             var = ast['var']['AST_VAR']['name'].replace('"', '')
             cls = ast['expr']['AST_NEW']['class']['AST_NAME']['name'].replace('"', '')
             self.varMap[var] = cls
+            #print(f"NEW {var} == {cls}")
         except:
-            #print(f"ERR doNew {ast}")
+            #print(f"ERR doNew {ast}")  #Blir många av dessa felen !
             pass
         for key,val in ast.items():
             self.process(val)
@@ -210,11 +254,14 @@ class ast():
             elif ast.get('AST_METHOD_CALL'):
                 self.doMethodCall(ast['AST_METHOD_CALL'])
             elif ast.get('AST_CALL'):
+                #print('P', ast)
                 self.doAST_Call(ast['AST_CALL'])
             elif ast.get('AST_STATIC_CALL'):
                 self.doAST_Static_Call(ast['AST_STATIC_CALL'])
             elif ast.get('AST_ASSIGN'):
                 self.doNew(ast['AST_ASSIGN'])
+            elif ast.get('AST_FUNC_DECL'):
+                self.doAST_Function(ast['AST_FUNC_DECL'])
             else:
                 for key,val in ast.items():
                     self.process(val)
@@ -234,7 +281,7 @@ class ast():
 allData = {}  #all data per file
 fileData = {}  #ast per file
 # Gå igenom alla PHP-filer i projdDir recursivt utom
-skipDir = ['/smarty/', '/Disuppd/', '/Disconv/', '/DisgenDubblett/'] #
+skipDir = ['/smarty/', '/Disuppd/', '/Disconv/'] #
 for filPath in Path(projDir).rglob('*.php'):
     f = str(filPath)
     p = '|'.join(skipDir)
@@ -245,23 +292,26 @@ for filPath in Path(projDir).rglob('*.php'):
     #if 'Web/Disconv/' in f: continue
     #? REMOVE all resultfiles
     try:
+        #if 'pushJsonData' not in f: continue
+        #if 'MSPDO1' not in f: continue
+        #if not( 'MSPDO1' in f or 'MedDB' in f): continue
         print(f"Analyserar '{f}'")
-        allData[f] = {'ast': None, 'defined': {}, 'id2Namn': {}, 'defFunk': set(), 'calls': set(), 'anropade': set(),
+        allData[f] = {'ast': None, 'localUsed': {}, 'id2Namn': {}, 'localDefinedFunk': set(), 'calls': None, 'anropade': set(),
                       'allFuncs': set(), 'externa_anrop': set(), 'inteAnropadeNamn': set(), 'graphDot': ''}
-        localDefined = {}
-        localDefFunk = set()
+        localUsed = {}     #Nollställ
+        localDefinedFunk = set()  #Nollställ
         fileData[f] = None
         fileAST = ast(f)
-        fileData[f] = fileAST.getTree()
+        fileData[f] = fileAST.getTree()  #Fyll på globala variabler
         allData[f]['ast'] = fileData[f]
         fileData[f].assignIds()
         # data per fil
-        allData[f]['defined'] = localDefined
-        fileData[f].definedFunctions() #funktioner använda i denna fil
-        allData[f]['defFunk'] = localDefFunk #funktioner i definierade i denna fill
-        allData[f]['id2Name'] = {v: k for k, v in localDefined.items()}
-        allData[f]['allFuncs'] = set(allData[f]['defined'].values())  #Alla funktioner i denna fil
-        allData[f]['externa_anrop'] = list(allData[f]['allFuncs'].difference(allData[f]['defFunk']))  #anropade externa funktioner
+        fileData[f].usedFunctions() #Fyll på defFunk och localUsed
+        allData[f]['localUsed'] = localUsed
+        allData[f]['localDefinedFunk'] = localDefinedFunk #funktioner i definierade i denna fill
+        allData[f]['id2Name'] = {v: k for k, v in localUsed.items()}
+        allData[f]['allFuncs'] = set(allData[f]['localUsed'].values())  #Alla funktioner definierade eller anropade i denna fil
+        allData[f]['externa_anrop'] = list(allData[f]['allFuncs'].difference(allData[f]['localDefinedFunk']))  #anropade externa funktioner
         allData[f]['externaAnropadeNamn'] = [ allData[f]['id2Name'][x] for x in  allData[f]['externa_anrop'] ]
         allData[f]['graphDot'] = allData[f]['ast'].mkGraph() # UTAN externa anrop - för att kunna hitta anropade
         #compress graph - remove duplicate links
@@ -275,6 +325,8 @@ for filPath in Path(projDir).rglob('*.php'):
                 compressedGraph += line + "\n"
                 doneLink.add(line)
         allData[f]['graphDot'] = compressedGraph
+        """TEST
+        #FLYTTAS UT?? VERKAR INTE BEHÖVAS
         #anropade (called) functions
         allData[f]['calls'] = defaultdict(set)
         allData[f]['anropade'] = set()
@@ -286,6 +338,7 @@ for filPath in Path(projDir).rglob('*.php'):
             except:
                 pass
         allData[f]['inteAnropadeNamn'] = [allData[f]['id2Name'][x] for x in  allData[f]['allFuncs'].difference(allData[f]['anropade']).difference(allData[f]['externa_anrop'])]
+        """
     except Exception as e:
         #print(traceback.print_exception(e))
         print(f"MISSLYCKADES med {f} se logfil\n")
@@ -298,23 +351,36 @@ for filPath in Path(projDir).rglob('*.php'):
             log.write(str(type(e)) + "\n")
             log.write("".join(traceback.format_exception(e)))
 
-id2Name = {v: k for k, v in defined.items()}
+id2Name = {v: k for k, v in name2Id.items()}
 
 ##Generera resultatfiler
+allaAnrop = set()
+for fx,fxData in allData.items():
+    #if fxData['anropade']:
+    if fxData['externa_anrop']:
+        #allaAnrop.update(set(fxData['anropade']))
+        allaAnrop.update(set(fxData['externa_anrop']))
+        #if name2Id['searchFreetext'] in fxData['externa_anrop']:
+        #    print(f"searchFreetext anropad från {fx}")
 
 for f,data in allData.items():
     #if not 'MSPDO1' in str(f): continue  #DEB
     # Generera HTML för varje PHP-fil
-    allFuncs = data['allFuncs']  #set(defined.values())  #Alla funktioner
-    externa_anrop = data['externa_anrop']  #list(allFuncs.difference(defFunk))  #anrop till externa funktioner
+    allFuncs = data['allFuncs']  #set(name2Id.values())  #Alla funktioner
+    externa_anrop = data['externa_anrop']  #anrop till externa funktioner
     dotfil = './data/' + os.path.split(f)[1].replace('php', 'dot')
     #Graph med externa anrop
-    allaAnrop = set()
-    for fx,fxData in allData.items():
-        if fxData['anropade']:
-            allaAnrop.update(set(fxData['anropade']))
-    lokalaFunkInteAnropade = (allData[f]['defFunk'] & allaAnrop) -  allData[f]['anropade']
-    lokalaFunkExterntAnropade = allData[f]['defFunk'] & allaAnrop
+    lokalaFunkInteAnropade = (allData[f]['localDefinedFunk'] & allaAnrop) -  allData[f]['anropade']
+    #
+    lokalaFunkExterntAnropade = allData[f]['localDefinedFunk'] & allaAnrop  ##FEL FIX!!
+    """
+    if 'MSPDO1' in f:
+        print(f"searchFreetext id={name2Id['searchFreetext']}")
+        if name2Id['searchFreetext'] in lokalaFunkInteAnropade:
+            print(f"lokalaFunkInteAnropade searchFreetext")
+        if name2Id['searchFreetext'] in lokalaFunkExterntAnropade:
+            print(f"lokalaFunkExterntAnropade searchFreetext")
+    """
     if data['graphDot']:
         dotAdd = 'Extern  [fillcolor="coral", style=filled, shape="box"];\n'
         for id in lokalaFunkExterntAnropade:
@@ -336,18 +402,18 @@ for f,data in allData.items():
         <h1>Statisk call-graf för {filnamn}</h1>
         <a href='./top_index.html'>Tillbaka till top index</a>
         """)
-        """??
-        if allFuncs.difference(anropade).difference(externa_anrop):
-            html.write("<h2>Inte !lokalt! anropade funktioner ?</h2>\n")
-            inteAnropadeNamn = data['inteAnropadeNamn']  #[id2Name[x] for x in allFuncs.difference(anropade).difference(externa_anrop)]
+        if data['inteAnropadeNamn']:
+            html.write("<h2>Inte !lokalt! anropade funktioner</h2>\n")
+            inteAnropadeNamn = data['inteAnropadeNamn']
             html.write(', '.join(sorted(inteAnropadeNamn)))
             html.write("<p>\n")
-        """
-        #printa externa_anrop
+        
+        #printa namn på alla anropade anropade externa funktioner
         if externa_anrop:
-            html.write("<h2>Externa anrop till:</h2>\n")
-            externaAnropadeNamn = data['externaAnropadeNamn']
+            html.write(f"<h2>Anropade funktioner i andra filer:</h2>\n")
+            externaAnropadeNamn = list(set(data['externaAnropadeNamn']) - stdFunctions)
             html.write(', '.join(sorted(externaAnropadeNamn)))
+            html.write("\n")
         # FIX KOLLA OM det finns graf!
         if ' -> ' in graph:
             html.write("<h2>Call-graf</h2>\n")
@@ -359,13 +425,11 @@ for f,data in allData.items():
             html.write(f"<img src='{dotfil.replace('data/', '').replace('.dot', '.svg')}' width='100%'>\n")
         html.write("</body>\n</html>\n")
 
-#Global analys
-
 ## Kolla dubbletter och inte anropade
 #print('Funktioner definierade i mer än 1 fil')
 dubl = defaultdict(int)
 for f, data in allData.items():
-    for id in allData[f]['defFunk']:
+    for id in allData[f]['localDefinedFunk']:
         if id2Name[id] == '__construct': continue
         dubl[id] += 1
 dublDef = {}
@@ -373,7 +437,7 @@ for id,ant in dubl.items():
     if ant > 1:
         files = []
         for f, data in allData.items():
-            if id in data['defFunk']:
+            if id in data['localDefinedFunk']:
                 files.append(f.replace(projDir, './'))
         #print(f"{id}, {id2Name[id]}, {','.join(files)}")
         dublDef[id2Name[id]] = files
@@ -384,7 +448,7 @@ for f,data in allData.items(): #?
     allaAnropade.update(set(data['anropade']))
 allaInteAnropade = defFunk - allaAnropade
 
-#Projekt graf
+#Graf för hela projekt
 #Fixa graph i 'mkGraph' - lägg till vid utskrift
 #lägg till 'graphDot' för alla filer
 graph = ''
@@ -400,6 +464,24 @@ with open(pgrfil, 'w') as fil:
     fil.write(graph)
     fil.write("}\n")
 os.system(f"dot -Tsvg {pgrfil} > {pgrfil.replace('.dot', '.svg')}")
+
+#Global analys
+
+##Gå igen ast (top Node i trädet) och hitta Anropade och Definierade
+Anropade = set()
+Definierade = set()
+for fil,astTree in fileData.items():
+    try:
+        astTree.getFunctions()  #Extraherar alla Anropade och Definierade till globala variabler
+    except:
+        #Misslyckade filer
+        pass
+        #print('ERR', fil, astTree)
+Anropade = Anropade - stdFunctions
+#print(f"Anropade: {Anropade}")
+#print(f"Anropade men inte definierade {Anropade - Definierade}")
+#print(f"Definierade men inte anropade {Definierade - Anropade}")
+
 with open('./data/top_index.html', 'w') as html:
     html.write(f"""<!DOCTYPE html>
     <html>
@@ -425,11 +507,19 @@ with open('./data/top_index.html', 'w') as html:
         else:
             html.write(f"<td>-</td></tr>\n")
     html.write("</table>\n")
-    #Inte anropade
-    html.write("<h2>Inte använda funktioner</h2>\n")
-    for id in allaInteAnropade:
-        html.write(f"{id2Name[id]}, ")
-    #html.write(f"{allaInteAnropade}")
+    
+    #html.write("<h2>Inte använda funktioner</h2>\n")
+    #html.write(', '.join(sorted([id2Name[id] for id in allaInteAnropade])))
+
+    html.write("<h2>Inte använda funktioner (case-sensitive)</h2>\n")
+    html.write(', '.join(sorted(Definierade - Anropade)))
+        
+    #html.write("<h2>Anropade men inte definierade</h2>\n")
+    #html.write(', '.join(sorted(anropadeInteDefinierade)))
+    
+    html.write("<h2>Anropade men inte definierade (case-sensitive)</h2>\n")
+    html.write(', '.join(sorted(Anropade - Definierade)))
+    
     html.write("<h2>Funktioner definierade mer än 1 gång</h2>\n")
     html.write("<table border=1>\n")
     html.write("<tr><th>Funktion</th><th>Filer</th></tr>\n")
@@ -438,11 +528,3 @@ with open('./data/top_index.html', 'w') as html:
     html.write("</table>\n")
     #html.write(f"{dublDef}")
     html.write("</body></html>")
-"""
-#Check inte använda
-    for id in allaInteAnropade:
-        namn = id2Name[id]
-        cmd = f'grep -r -e "{namn}" {projDir}'
-        ext = subprocess.check_output(cmd, shell=True)
-        print(ext)
-"""
