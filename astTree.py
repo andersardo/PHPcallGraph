@@ -37,7 +37,7 @@ except Exception as e:
 class Node:
     def __init__(self, name, typ, data=''):
         self.name = name.replace(projDir, '')  #Remove start-path
-        #FIX case handling PHP insensitive for case
+        #FIX? case handling PHP insensitive for case
         self.nameLower = name.replace(projDir, '').lower()  #Remove start-path; case-insensitive 
         self.id = '?'
         if typ in ('Fil', 'Klass', 'Funk', 'Anrop'):
@@ -125,6 +125,15 @@ class Node:
             Anropade.add(self.name)
         for n in self.nodes:
             n.getFunctions()
+
+    def getBeroende(self):  # 
+        global AnroparPerFil, DefinieradePerFil
+        if self.typ == 'Funk':  #Definierade
+            DefinieradePerFil.add(self.name)
+        elif self.typ == 'Anrop':  #Anropade
+            AnroparPerFil.add(self.name)
+        for n in self.nodes:
+            n.getBeroende()
 
 class ast():
     def __init__(self, file):
@@ -478,9 +487,47 @@ for fil,astTree in fileData.items():
         pass
         #print('ERR', fil, astTree)
 Anropade = Anropade - stdFunctions
-#print(f"Anropade: {Anropade}")
-#print(f"Anropade men inte definierade {Anropade - Definierade}")
-#print(f"Definierade men inte anropade {Definierade - Anropade}")
+
+##Gör callgraf mellan filer
+filBeroende = {} #filnamn -> set av anropade filnamn
+for fil,astTree in fileData.items():
+    AnroparPerFil = set()
+    DefinieradePerFil = set()
+    try:
+        astTree.getBeroende()  #Extraherar alla Anropade och Definierade till globala variabler
+    except:
+        #Misslyckade filer
+        pass
+    filBeroende[fil] = {'Anropar': AnroparPerFil - stdFunctions, 'Definierade': DefinieradePerFil}
+    #print(f"filBeroende för {fil}: {filBeroende[fil]}")
+function2fil = {}  #I vilken fil är en funktion definierad
+filGraph = defaultdict(set)  
+for fil, data in filBeroende.items():
+    for func in data['Definierade']:
+        function2fil[func] = fil
+#print(f"function2fil: {function2fil}")
+for fil, data in filBeroende.items():
+    for anrop in data['Anropar']:
+        try: 
+            filGraph[fil].add(function2fil[anrop])
+        except:
+            #print(f"ERR {anrop} i {fil}")
+            pass
+#print(f"filGraph: {filGraph}")
+done = set()
+with open('data/filGraph.dot', 'w') as gr:
+    gr.write("digraph filGraph {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25;\n")
+    for fil, data in filGraph.items():
+        fil = fil.replace(projDir, '')
+        f = fil.replace('.php', '').replace('/', '_')
+        if fil not in done:
+            gr.write(f'{f} [fillcolor="cornflowerblue", label="{fil}", style=filled, shape="box"];\n')
+            done.add(fil)
+        for beroenden in data:
+            ff = beroenden.replace(projDir, '').replace('.php', '').replace('/', '_')
+            gr.write(f"{f} -> {ff}\n")
+    gr.write("}\n")
+os.system(f"dot -Tsvg data/filGraph.dot > data/filGraph.svg")
 
 with open('./data/top_index.html', 'w') as html:
     html.write(f"""<!DOCTYPE html>
@@ -488,6 +535,7 @@ with open('./data/top_index.html', 'w') as html:
     <head><title>Statiska call-grafer för projektet {projDir}</title></head>
     <body>
     <a href="totLog.txt">Log för hela körningen</a><br>
+    <a href="filGraph.svg">Graph över fil-beroenden</a><br>
     <a href="projektGraph.svg">Graph över hela projeket (STOR)</a>
     <h4>Skippade kataloger: {', '.join(skipDir)}</h4>
     <h1>Statiska call-grafer för {projDir}</h1>
@@ -507,17 +555,12 @@ with open('./data/top_index.html', 'w') as html:
         else:
             html.write(f"<td>-</td></tr>\n")
     html.write("</table>\n")
-    
-    #html.write("<h2>Inte använda funktioner</h2>\n")
-    #html.write(', '.join(sorted([id2Name[id] for id in allaInteAnropade])))
-
-    html.write("<h2>Inte använda funktioner (case-sensitive)</h2>\n")
+    html.write("<p><b>Analysen skiljer på gemena och versaler, vilket PHP inte gör\n")
+    html.write("'getData' och 'getdata' är samma i PHP, men här behandlas dom som 2 olika identifierare.</b>\n")
+    html.write("<h2>Inte använda funktioner</h2>\n")
     html.write(', '.join(sorted(Definierade - Anropade)))
         
-    #html.write("<h2>Anropade men inte definierade</h2>\n")
-    #html.write(', '.join(sorted(anropadeInteDefinierade)))
-    
-    html.write("<h2>Anropade men inte definierade (case-sensitive)</h2>\n")
+    html.write("<h2>Anropade men inte definierade</h2>\n")
     html.write(', '.join(sorted(Anropade - Definierade)))
     
     html.write("<h2>Funktioner definierade mer än 1 gång</h2>\n")
