@@ -10,10 +10,8 @@ import traceback
 # Globala variabler
 uid = 0
 name2Id = {}  #Använda funktioner
-localUsed = {} #defined in this file (dict name -> Id) plus anropade
 defFunk = set()  #id of defined functions (Funk)
-#skillnad på set(name2id.values) och defFunk ?????
-localDefinedFunk = set()  #id of functions defined in this file
+
 #Read list of standard funktions in PHP
 stdFunctions = set()
 with open('allaPHPstdFunktioner.txt', 'r') as f:
@@ -33,6 +31,9 @@ try:
         help(f"'{projDir}' är inte en katalog")
 except Exception as e:
     sys.exit(f"{projDir} är inte en katalog {e}")
+
+#REMOVE all resultfiles
+os.system('rm data/*')
 
 class Node:
     def __init__(self, name, typ, data=''):
@@ -105,7 +106,6 @@ class Node:
             uid += 1
             self.id = uid
             name2Id[f"{self.name}"] = uid
-        localUsed[f"{self.name}"] = self.id
         for n in self.nodes:
             n.assignIds()
 
@@ -113,20 +113,10 @@ class Node:
         global defFunk
         if self.typ == 'Funk':
             defFunk.add(self.id)
-            localDefinedFunk.add(self.id)
         for n in self.nodes:
             n.usedFunctions()
 
-    def getFunctions(self):  # Anropade och Definierade
-        global Anropade, Definierade
-        if self.typ == 'Funk':  #Definierade
-            Definierade.add(self.name)
-        elif self.typ == 'Anrop':  #Anropade
-            Anropade.add(self.name)
-        for n in self.nodes:
-            n.getFunctions()
-
-    def getBeroende(self):  # 
+    def getBeroende(self):
         global AnroparPerFil, DefinieradePerFil
         if self.typ == 'Funk':  #Definierade
             DefinieradePerFil.add(self.name)
@@ -290,38 +280,27 @@ class ast():
 allData = {}  #all data per file
 fileData = {}  #ast per file
 # Gå igenom alla PHP-filer i projdDir recursivt utom
-skipDir = ['/smarty/', '/Disuppd/', '/Disconv/'] #
+skipDir = ['/smarty/'] #['/smarty/', '/Disuppd/', '/Disconv/'] #
 for filPath in Path(projDir).rglob('*.php'):
     f = str(filPath)
-    p = '|'.join(skipDir)
-    pattern = re.compile(r'%s' % p)
-    m = re.search(pattern, f)
-    if m: continue
-    #if '/smarty/' in f: continue
-    #if 'Web/Disconv/' in f: continue
-    #? REMOVE all resultfiles
+    if skipDir:
+        p = '|'.join(skipDir)
+        pattern = re.compile(r'%s' % p)
+        m = re.search(pattern, f)
+        if m: continue
     try:
         #if 'pushJsonData' not in f: continue
         #if 'MSPDO1' not in f: continue
         #if not( 'MSPDO1' in f or 'MedDB' in f): continue
         print(f"Analyserar '{f}'")
-        allData[f] = {'ast': None, 'localUsed': {}, 'id2Namn': {}, 'localDefinedFunk': set(), 'calls': None, 'anropade': set(),
-                      'allFuncs': set(), 'externa_anrop': set(), 'inteAnropadeNamn': set(), 'graphDot': ''}
-        localUsed = {}     #Nollställ
-        localDefinedFunk = set()  #Nollställ
+        allData[f] = {'ast': None, 'graphDot': ''}
         fileData[f] = None
         fileAST = ast(f)
         fileData[f] = fileAST.getTree()  #Fyll på globala variabler
         allData[f]['ast'] = fileData[f]
         fileData[f].assignIds()
+        fileData[f].usedFunctions() #Fyll på defFunk
         # data per fil
-        fileData[f].usedFunctions() #Fyll på defFunk och localUsed
-        allData[f]['localUsed'] = localUsed
-        allData[f]['localDefinedFunk'] = localDefinedFunk #funktioner i definierade i denna fill
-        allData[f]['id2Name'] = {v: k for k, v in localUsed.items()}
-        allData[f]['allFuncs'] = set(allData[f]['localUsed'].values())  #Alla funktioner definierade eller anropade i denna fil
-        allData[f]['externa_anrop'] = list(allData[f]['allFuncs'].difference(allData[f]['localDefinedFunk']))  #anropade externa funktioner
-        allData[f]['externaAnropadeNamn'] = [ allData[f]['id2Name'][x] for x in  allData[f]['externa_anrop'] ]
         allData[f]['graphDot'] = allData[f]['ast'].mkGraph() # UTAN externa anrop - för att kunna hitta anropade
         #compress graph - remove duplicate links
         compressedGraph = ''
@@ -334,20 +313,6 @@ for filPath in Path(projDir).rglob('*.php'):
                 compressedGraph += line + "\n"
                 doneLink.add(line)
         allData[f]['graphDot'] = compressedGraph
-        """TEST
-        #FLYTTAS UT?? VERKAR INTE BEHÖVAS
-        #anropade (called) functions
-        allData[f]['calls'] = defaultdict(set)
-        allData[f]['anropade'] = set()
-        for l in allData[f]['graphDot'].splitlines():
-            try:
-                (caller, callee) = l.strip().rstrip(';').split(' -> ')
-                allData[f]['calls'][caller].add(int(callee))
-                allData[f]['anropade'].add(int(callee))  #Behöver uppdateras med anrop från andra filer
-            except:
-                pass
-        allData[f]['inteAnropadeNamn'] = [allData[f]['id2Name'][x] for x in  allData[f]['allFuncs'].difference(allData[f]['anropade']).difference(allData[f]['externa_anrop'])]
-        """
     except Exception as e:
         #print(traceback.print_exception(e))
         print(f"MISSLYCKADES med {f} se logfil\n")
@@ -363,36 +328,58 @@ for filPath in Path(projDir).rglob('*.php'):
 id2Name = {v: k for k, v in name2Id.items()}
 
 ##Generera resultatfiler
-allaAnrop = set()
-for fx,fxData in allData.items():
-    #if fxData['anropade']:
-    if fxData['externa_anrop']:
-        #allaAnrop.update(set(fxData['anropade']))
-        allaAnrop.update(set(fxData['externa_anrop']))
-        #if name2Id['searchFreetext'] in fxData['externa_anrop']:
-        #    print(f"searchFreetext anropad från {fx}")
 
+Anropade = set() #name
+Definierade = set()
+##Gör callgraf mellan filer
+filBeroende = {} #filnamn -> set av anropade filnamn
+for fil,astTree in fileData.items():
+    AnroparPerFil = set()
+    DefinieradePerFil = set()
+    try:
+        astTree.getBeroende()  #Extraherar alla Anropade och Definierade till globala variabler
+    except:
+        #Misslyckade filer
+        pass
+    filBeroende[fil] = {'Anropar': AnroparPerFil - stdFunctions, 'Definierade': DefinieradePerFil}
+    Anropade.update(AnroparPerFil - stdFunctions)
+    Definierade.update(DefinieradePerFil)
+function2fil = {}  #I vilken fil är en funktion definierad
+filGraph = defaultdict(set)  
+for fil, data in filBeroende.items():
+    for func in data['Definierade']:
+        function2fil[func] = fil
+for fil, data in filBeroende.items():
+    for anrop in data['Anropar']:
+        try: 
+            filGraph[fil].add(function2fil[anrop])
+        except:
+            #print(f"ERR {anrop} i {fil}")
+            pass
+
+done = set()
+with open('data/filGraph.dot', 'w') as gr:
+    gr.write("digraph filGraph {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25;\n")
+    for fil, data in filGraph.items():
+        fil = fil.replace(projDir, '')
+        f = fil.replace('.php', '').replace('/', '_')
+        if fil not in done:
+            gr.write(f'{f} [fillcolor="cornflowerblue", label="{fil}", style=filled, shape="box"];\n')
+            done.add(fil)
+        for beroenden in data:
+            ff = beroenden.replace(projDir, '').replace('.php', '').replace('/', '_')
+            gr.write(f"{f} -> {ff}\n")
+    gr.write("}\n")
+os.system(f"dot -Tsvg data/filGraph.dot > data/filGraph.svg")
+
+# Generera HTML för varje PHP-fil
 for f,data in allData.items():
     #if not 'MSPDO1' in str(f): continue  #DEB
-    # Generera HTML för varje PHP-fil
-    allFuncs = data['allFuncs']  #set(name2Id.values())  #Alla funktioner
-    externa_anrop = data['externa_anrop']  #anrop till externa funktioner
     dotfil = './data/' + os.path.split(f)[1].replace('php', 'dot')
-    #Graph med externa anrop
-    lokalaFunkInteAnropade = (allData[f]['localDefinedFunk'] & allaAnrop) -  allData[f]['anropade']
-    #
-    lokalaFunkExterntAnropade = allData[f]['localDefinedFunk'] & allaAnrop  ##FEL FIX!!
-    """
-    if 'MSPDO1' in f:
-        print(f"searchFreetext id={name2Id['searchFreetext']}")
-        if name2Id['searchFreetext'] in lokalaFunkInteAnropade:
-            print(f"lokalaFunkInteAnropade searchFreetext")
-        if name2Id['searchFreetext'] in lokalaFunkExterntAnropade:
-            print(f"lokalaFunkExterntAnropade searchFreetext")
-    """
+    lokalaFunkExterntAnropade = filBeroende[f]['Definierade'] & Anropade
     if data['graphDot']:
         dotAdd = 'Extern  [fillcolor="coral", style=filled, shape="box"];\n'
-        for id in lokalaFunkExterntAnropade:
+        for id in {name2Id[i] for i in lokalaFunkExterntAnropade}:
             dotAdd += f"Extern -> {id};\n"
         graph = allData[f]['graphDot'] + dotAdd
         with open(f"{dotfil}", 'w') as fil:
@@ -411,19 +398,7 @@ for f,data in allData.items():
         <h1>Statisk call-graf för {filnamn}</h1>
         <a href='./top_index.html'>Tillbaka till top index</a>
         """)
-        if data['inteAnropadeNamn']:
-            html.write("<h2>Inte !lokalt! anropade funktioner</h2>\n")
-            inteAnropadeNamn = data['inteAnropadeNamn']
-            html.write(', '.join(sorted(inteAnropadeNamn)))
-            html.write("<p>\n")
         
-        #printa namn på alla anropade anropade externa funktioner
-        if externa_anrop:
-            html.write(f"<h2>Anropade funktioner i andra filer:</h2>\n")
-            externaAnropadeNamn = list(set(data['externaAnropadeNamn']) - stdFunctions)
-            html.write(', '.join(sorted(externaAnropadeNamn)))
-            html.write("\n")
-        # FIX KOLLA OM det finns graf!
         if ' -> ' in graph:
             html.write("<h2>Call-graf</h2>\n")
             html.write("""Blå är den analyserade filen.<br>
@@ -434,112 +409,48 @@ for f,data in allData.items():
             html.write(f"<img src='{dotfil.replace('data/', '').replace('.dot', '.svg')}' width='100%'>\n")
         html.write("</body>\n</html>\n")
 
-## Kolla dubbletter och inte anropade
-#print('Funktioner definierade i mer än 1 fil')
-dubl = defaultdict(int)
-for f, data in allData.items():
-    for id in allData[f]['localDefinedFunk']:
-        if id2Name[id] == '__construct': continue
-        dubl[id] += 1
+## Dubblettnamn för funktioner
 dublDef = {}
-for id,ant in dubl.items():
+dubl = defaultdict(int) #tmp var
+for f, data in allData.items():
+    for nm in filBeroende[f]['Definierade']:
+        if nm == '__construct': continue
+        dubl[nm] += 1
+for nm,ant in dubl.items():
     if ant > 1:
         files = []
         for f, data in allData.items():
-            if id in data['localDefinedFunk']:
+            if nm in filBeroende[f]['Definierade']:
                 files.append(f.replace(projDir, './'))
-        #print(f"{id}, {id2Name[id]}, {','.join(files)}")
-        dublDef[id2Name[id]] = files
-#
-#inte anropade - alla allaDefFunk - allaAnropade
-allaAnropade = set()
-for f,data in allData.items(): #?
-    allaAnropade.update(set(data['anropade']))
-allaInteAnropade = defFunk - allaAnropade
+        dublDef[nm] = files
 
-#Graf för hela projekt
-#Fixa graph i 'mkGraph' - lägg till vid utskrift
-#lägg till 'graphDot' för alla filer
-graph = ''
-k = 1
-for f,data in allData.items():
-    graph += f'subgraph cluster{k} {{graph [style=rounded]  label="FIL: {f}"\n'
-    graph += data['graphDot']
-    graph += "}\n"
-    k += 1
+#Graf för alla filer i hela projekt
 pgrfil = './data/projektGraph.dot'
 with open(pgrfil, 'w') as fil:
+    graph = ''
+    k = 1
+    for f,data in allData.items():
+        graph += f'subgraph cluster{k} {{graph [style=rounded]  label="FIL: {f}"\n'
+        graph += data['graphDot']
+        graph += "}\n"
+        k += 1
     fil.write("digraph Projekt {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25; \n")
     fil.write(graph)
     fil.write("}\n")
 os.system(f"dot -Tsvg {pgrfil} > {pgrfil.replace('.dot', '.svg')}")
 
-#Global analys
-
-##Gå igen ast (top Node i trädet) och hitta Anropade och Definierade
-Anropade = set()
-Definierade = set()
-for fil,astTree in fileData.items():
-    try:
-        astTree.getFunctions()  #Extraherar alla Anropade och Definierade till globala variabler
-    except:
-        #Misslyckade filer
-        pass
-        #print('ERR', fil, astTree)
-Anropade = Anropade - stdFunctions
-
-##Gör callgraf mellan filer
-filBeroende = {} #filnamn -> set av anropade filnamn
-for fil,astTree in fileData.items():
-    AnroparPerFil = set()
-    DefinieradePerFil = set()
-    try:
-        astTree.getBeroende()  #Extraherar alla Anropade och Definierade till globala variabler
-    except:
-        #Misslyckade filer
-        pass
-    filBeroende[fil] = {'Anropar': AnroparPerFil - stdFunctions, 'Definierade': DefinieradePerFil}
-    #print(f"filBeroende för {fil}: {filBeroende[fil]}")
-function2fil = {}  #I vilken fil är en funktion definierad
-filGraph = defaultdict(set)  
-for fil, data in filBeroende.items():
-    for func in data['Definierade']:
-        function2fil[func] = fil
-#print(f"function2fil: {function2fil}")
-for fil, data in filBeroende.items():
-    for anrop in data['Anropar']:
-        try: 
-            filGraph[fil].add(function2fil[anrop])
-        except:
-            #print(f"ERR {anrop} i {fil}")
-            pass
-#print(f"filGraph: {filGraph}")
-done = set()
-with open('data/filGraph.dot', 'w') as gr:
-    gr.write("digraph filGraph {nodesep=0.3; overlap=False; rankdir=LR; ranksep=0.25;\n")
-    for fil, data in filGraph.items():
-        fil = fil.replace(projDir, '')
-        f = fil.replace('.php', '').replace('/', '_')
-        if fil not in done:
-            gr.write(f'{f} [fillcolor="cornflowerblue", label="{fil}", style=filled, shape="box"];\n')
-            done.add(fil)
-        for beroenden in data:
-            ff = beroenden.replace(projDir, '').replace('.php', '').replace('/', '_')
-            gr.write(f"{f} -> {ff}\n")
-    gr.write("}\n")
-os.system(f"dot -Tsvg data/filGraph.dot > data/filGraph.svg")
+#GLOBAL ANALYS
 
 with open('./data/top_index.html', 'w') as html:
     html.write(f"""<!DOCTYPE html>
     <html>
     <head><title>Statiska call-grafer för projektet {projDir}</title></head>
     <body>
-    <a href="totLog.txt">Log för hela körningen</a><br>
     <a href="filGraph.svg">Graph över fil-beroenden</a><br>
     <a href="projektGraph.svg">Graph över hela projeket (STOR)</a>
     <h4>Skippade kataloger: {', '.join(skipDir)}</h4>
     <h1>Statiska call-grafer för {projDir}</h1>
-    """)
+      """)
     html.write("<table border=1>\n")
     html.write("<tr><th>Katalog</th><th>Fil</th><th>Log-fil</th></tr>\n")
     for fil in sorted(fileData.keys()):
