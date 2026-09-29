@@ -199,7 +199,8 @@ function ast_to_struct($ast, int $options = 0)
 function parse_php_file(string $file): string
 {
     try {
-        $astTree = ast\parse_file($file, ast\version\LATEST);
+        //$astTree = ast\parse_file($file, ast\version\LATEST);
+        $astTree = ast\parse_file($file, 110);
     } catch (ParseError $e) {
         throw new RuntimeException(
             "Parse error in {$file} at line {$e->getLine()}: {$e->getMessage()}"
