@@ -183,7 +183,7 @@ function ast_to_struct($ast, int $options = 0)
     } elseif ($ast === null) {
         return null;
     } elseif (is_string($ast)) {
-        return "\"{$ast}\"";
+        return \"\"{$ast}\"\";
     } else {
         return $ast;
     }
